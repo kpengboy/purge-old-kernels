@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+
+# Copyright (c) 2015 Kevin Peng
+# All rights reserved.
+# 
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+# 
+# 1. Redistributions of source code must retain the above copyright notice,
+#    this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+#    this list of conditions and the following disclaimer in the documentation
+#    and/or other materials provided with the distribution.
+# 
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+
+import argparse
+import re
+import subprocess
+import sys
+import textwrap
+import time
+
+PKG_TYPES = ["headers", "image", "image-extra", "tools"]
+PKG_EXPR_STR = "^linux-(" + "|".join(map(re.escape, PKG_TYPES)) + ")" \
+               + r"-([\d\.-]+?)(-[A-Za-z]+)?$"
+PKG_EXPR = re.compile(PKG_EXPR_STR)
+
+def parse_version(name):
+    """Parses the series and revision number out of a kernel package name.
+
+    Example input: linux-image-3.13.0-57-generic
+    Example output: ('3.13.0', '57')
+
+    Example input: linux-headers-4.1.13-gnu
+    Example output: ('4.1', '13')
+    """
+
+    m = re.match(PKG_EXPR, name)
+    version = m.group(2)
+    series, revision = re.match(r"([\d\.-]+?)[\.-](\d+)$", version).groups()
+    return (series, revision)
+
+def get_kernel_packages():
+    """Gets the list of packages from dpkg and returns a dictionary of
+    kernel packages organized by series and revision.
+
+    Example output:
+    {'3.13.0':
+      {'62': ['linux-headers-3.13.0-62', 'linux-headers-3.13.0-62-generic',
+              'linux-image-3.13.0-62-generic',
+              'linux-image-extra-3.13.0-62-generic', 'linux-tools-3.13.0-62',
+              'linux-tools-3.13.0-62-generic'],
+       '55': ['linux-headers-3.13.0-55', 'linux-headers-3.13.0-55-generic',
+              'linux-image-3.13.0-55-generic',
+              'linux-image-extra-3.13.0-55-generic', 'linux-tools-3.13.0-55',
+              'linux-tools-3.13.0-55-generic']},
+     '4.1':
+      {'12': ['linux-image-4.1.12-gnu'],
+       '13': ['linux-image-4.1.13-gnu']}}
+    """
+
+    lines = subprocess.check_output(["dpkg", "--get-selections"]).decode() \
+            .split("\n")
+    series = {}
+    for line in lines:
+        words = line.split()
+        # Filter out lines not describing installed kernel packages
+        if not words:
+            continue
+        elif len(words) != 2:
+            print("Warning: ignoring this line: " + line)
+            continue
+        pkg, status = words
+        if not (PKG_EXPR.match(pkg) and status == "install"):
+            continue
+
+        ser, rev = parse_version(pkg)
+        series.setdefault(ser, {}).setdefault(rev, []).append(pkg)
+
+    return series
+
+def do_it(n_keep, dry_run, debug):
+    wrapper = textwrap.TextWrapper(width=80, break_long_words=False,
+                                   break_on_hyphens=False)
+    if dry_run:
+        print("THIS IS A DRY RUN\n")
+
+    print("Right now it is", time.asctime(time.localtime()))
+    packages = get_kernel_packages()
+    packages_to_remove = []
+    for series in packages:
+        # Get a list of all revisions for this series
+        revisions = sorted(packages[series].keys(), key=int)
+
+        # Don't delete the most recent n_keep revisions
+        if debug:
+            print("debug: Not removing these packages:")
+            for rev in revisions[-n_keep:]:
+                print(wrapper.fill(" ".join(packages[series][rev])))
+            print()
+        del revisions[-n_keep:]
+        # Mark the other revisions for deletion
+        for rev in revisions:
+            packages_to_remove.extend(packages[series][rev])
+
+    print("Removing the following packages:")
+    print(wrapper.fill(" ".join(packages_to_remove)))
+    if dry_run:
+        cmd = ["apt-get", "-s", "purge"]
+    else:
+        cmd = ["apt-get", "-y", "purge"]
+    sys.stdout.flush()
+    subprocess.check_call(cmd + packages_to_remove)
+    print()
+
+def n_keep_type(string):
+    """argparse type checker for number of kernels to keep"""
+    val = int(string)
+    if val <= 0:
+        raise argparse.ArgumentTypeError("Number of kernels to keep must be "
+                                         "positive")
+    return val
+
+def main():
+    parser = argparse.ArgumentParser(description="Remove old revisions of "
+                                     "kernels in each kernel series")
+    parser.add_argument("-d", "--debug", action="store_true",
+                        help="Print debugging info")
+    parser.add_argument("-k", "--keep", action="store", type=n_keep_type,
+                        default=3,
+                        help="the number of kernels per series to keep")
+    parser.add_argument("-n", "--dry-run", action="store_true",
+                        help="don't actually remove packages")
+
+    opts = parser.parse_args()
+    do_it(opts.keep, opts.dry_run, opts.debug)
+
+if __name__ == "__main__":
+    main()

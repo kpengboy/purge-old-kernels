@@ -1,0 +1,8 @@
+This script removes all but the last N kernels of each kernel series installed.
+N is a number which defaults to 3. This script is suitable for both being
+run as a cronjob and being run manually.
+
+If you would like to use this script, keep in mind that it may not be polished
+too well. In particular, it could be rather raw with error conditions and
+error messages. Oh, and there's no warranty on this script either; you assume
+the risks if you choose to run it.
