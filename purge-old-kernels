@@ -114,14 +114,17 @@ def do_it(n_keep, dry_run, debug):
         for rev in revisions:
             packages_to_remove.extend(packages[series][rev])
 
-    print("Removing the following packages:")
-    print(wrapper.fill(" ".join(packages_to_remove)))
-    if dry_run:
-        cmd = ["apt-get", "-s", "purge"]
+    if not packages_to_remove:
+        print("Nothing to remove")
     else:
-        cmd = ["apt-get", "-y", "purge"]
-    sys.stdout.flush()
-    subprocess.check_call(cmd + packages_to_remove)
+        print("Removing the following packages:")
+        print(wrapper.fill(" ".join(packages_to_remove)))
+        if dry_run:
+            cmd = ["apt-get", "-s", "purge"]
+        else:
+            cmd = ["apt-get", "-y", "purge"]
+        sys.stdout.flush()
+        subprocess.check_call(cmd + packages_to_remove)
     print()
 
 def n_keep_type(string):
